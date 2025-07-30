@@ -1,0 +1,39 @@
+pipeline {
+    agent any
+
+    environment {
+        DOCKERHUB_CREDENTIALS = credentials('dockerhub') // Jenkins → Manage Credentials
+        IMAGE_NAME = 'yourdockerhubusername/trend-app'
+    }
+
+    stages {
+        stage('Clone Code') {
+            steps {
+                git 'https://github.com/yourusername/trend-app.git'
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                sh 'docker build -t $IMAGE_NAME .'
+            }
+        }
+
+        stage('Push to DockerHub') {
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'dockerhub', usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD')]) {
+                    sh 'echo $PASSWORD | docker login -u $USERNAME --password-stdin'
+                    sh 'docker push $IMAGE_NAME'
+                }
+            }
+        }
+
+        stage('Deploy to EKS') {
+            steps {
+                sh 'kubectl apply -f deployment.yaml'
+                sh 'kubectl apply -f service.yaml'
+            }
+        }
+    }
+}
+
