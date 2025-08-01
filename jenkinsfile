@@ -1,39 +1,114 @@
 pipeline {
-    agent any
+  agent any
 
-    environment {
-        DOCKERHUB_CREDENTIALS = credentials('dockerhub') // Jenkins → Manage Credentials
-        IMAGE_NAME = 'yourdockerhubusername/trend-app'
+  environment {
+    # Docker image name with dynamic tag (commit SHA short)
+    IMAGE_NAME = "aravinthdevops/trendmine"
+    AWS_REGION = "us-east-1"
+    CLUSTER_NAME = "trendify-cluster"
+    # Will be set after checkout
+    GIT_COMMIT_SHORT = ""
+  }
+
+  options {
+    // Keep build logs for troubleshooting
+    buildDiscarder(logRotator(numToKeepStr: '10'))
+    timestamps()
+  }
+
+  stages {
+    stage('Checkout') {
+      steps {
+        checkout scm
+        script {
+          GIT_COMMIT_SHORT = sh(
+            script: "git rev-parse --short=7 HEAD",
+            returnStdout: true
+          ).trim()
+          env.IMAGE_TAG = "${IMAGE_NAME}:${GIT_COMMIT_SHORT}"
+          echo "Using image tag: ${env.IMAGE_TAG}"
+        }
+      }
     }
 
-    stages {
-        stage('Clone Code') {
-            steps {
-                git 'https://github.com/yourusername/trend-app.git'
-            }
-        }
-
-        stage('Build Docker Image') {
-            steps {
-                sh 'docker build -t $IMAGE_NAME .'
-            }
-        }
-
-        stage('Push to DockerHub') {
-            steps {
-                withCredentials([usernamePassword(credentialsId: 'dockerhub', usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD')]) {
-                    sh 'echo $PASSWORD | docker login -u $USERNAME --password-stdin'
-                    sh 'docker push $IMAGE_NAME'
-                }
-            }
-        }
-
-        stage('Deploy to EKS') {
-            steps {
-                sh 'kubectl apply -f deployment.yaml'
-                sh 'kubectl apply -f service.yaml'
-            }
-        }
+    stage('Build Docker Image') {
+      steps {
+        sh "docker build -t ${env.IMAGE_TAG} ."
+      }
     }
+
+    stage('Login & Push to Docker Hub') {
+      environment {
+        // Credentials stored in Jenkins: ID 'dockerhub-creds' with username/password
+        DOCKERHUB_CRED = credentials('dockerhub-creds')
+      }
+      steps {
+        sh '''
+          echo "Logging into Docker Hub..."
+          echo $DOCKERHUB_CRED_PSW | docker login -u $DOCKERHUB_CRED_USR --password-stdin
+          docker push ${IMAGE_TAG}
+        '''.replace('${IMAGE_TAG}', env.IMAGE_TAG)
+      }
+    }
+
+    stage('Configure kubectl for EKS') {
+      steps {
+        script {
+          // If EC2 has IAM role with EKS permissions, no AWS credentials binding needed.
+          // Otherwise, you can bind AWS credentials with credentialsId 'aws-creds' and export here.
+          sh """
+            aws eks update-kubeconfig --region ${env.AWS_REGION} --name ${env.CLUSTER_NAME}
+          """
+          sh 'kubectl config current-context'
+        }
+      }
+    }
+
+    stage('Deploy to EKS') {
+      steps {
+        script {
+          // Save previous revision for potential rollback
+          sh "kubectl rollout status deployment/trendmine-deployment --timeout=10s || true"
+
+          // Update image in deployment (will create a new rollout)
+          sh """
+            kubectl set image deployment/trendmine-deployment \
+              trendmine=${env.IMAGE_TAG} --record
+          """
+
+          // Apply service manifest in case it does not exist
+          sh """
+            kubectl apply -f k8s/service.yaml
+          """
+
+          // Wait for rollout to succeed
+          sh """
+            kubectl rollout status deployment/trendmine-deployment --timeout=120s
+          """
+        }
+      }
+    }
+  }
+
+  post {
+    success {
+      echo " Deployment succeeded: ${env.IMAGE_TAG}"
+    }
+    failure {
+      script {
+        echo " Deployment failed, attempting rollback..."
+        // Rollback to previous revision
+        sh 'kubectl rollout undo deployment/trendmine-deployment || echo "Rollback failed or no previous revision"'
+      }
+    }
+    always {
+      // Optional: show current status
+      sh '''
+        echo "Current pods:"
+        kubectl get pods -l app=trendmine
+        echo "Current service:"
+        kubectl get svc trendmine-service
+      '''
+    }
+  }
 }
-

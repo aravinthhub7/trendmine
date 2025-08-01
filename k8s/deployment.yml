@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trendmine-deployment
+  labels:
+    app: trendmine
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: trendmine
+  template:
+    metadata:
+      labels:
+        app: trendmine
+    spec:
+      containers:
+      - name: trendmine
+        image: aravinthdevops/trendmine:latest
+        ports:
+        - containerPort: 80
