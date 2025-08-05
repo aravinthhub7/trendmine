@@ -1,9 +1,8 @@
-# Git
-.git
-.gitignore
 # Dependencies
-node_modules
+/node_modules
 # Logs
 npm-debug.log*
-# local env files
-.env
+yarn-debug.log*
+# Build artifacts
+/build
+/dist
