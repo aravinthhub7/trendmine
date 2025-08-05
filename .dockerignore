@@ -1,4 +1,9 @@
+# Git
+.git
+.gitignore
+# Dependencies
 node_modules
-npm-debug.log
-Dockerfile
-.dockerignore
+# Logs
+npm-debug.log*
+# local env files
+.env
