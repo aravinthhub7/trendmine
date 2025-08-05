@@ -301,12 +301,128 @@ Stop & Remove Container (if needed):
 docker stop trendify-container
 docker rm trendify-container
 
+Install aws configure
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+sudo apt install awscli
+
+login aws configure :
+aws configure
+
+Create EKS Cluster with ekctl:
+
+curl --silent --location "https://github.com/weaveworks/eksctl/releases/latest/download/eksctl_$(uname -s)_amd64.tar.gz" | tar xz -C /tmp
+chmod +x kubectl
+sudo mv /tmp/eksctl /usr/local/bin/
+kubectl version --client
 
 
 
+Command to create EKS cluster:
+eksctl create cluster \
+  --name trendify-cluster \
+  --region us-east-1 \
+  --nodegroup-name standard-nodes \
+  --node-type t3.small \
+  --nodes 1 \
+  --nodes-min 1 \
+  --nodes-max 2 \
+  --managed \
+  --with-oidc \
+  --ssh-access \
+  --ssh-public-key your-ec2-key-name(your-ec2-key-name: with your EC2 Key Pair name)
+  
+  After Cluster Creation: Configure kubectl:
+  
+  aws eks update-kubeconfig --region us-east-1 --name trendify-cluster
 
 
+Then test:
 
+kubectl get nodes
+
+to remove the cluster:
+
+eksctl delete cluster --name trendify-cluster --region us-east-1
+
+aws eks list-clusters --region us-east-1
+
+
+jenkins file:
+
+pipeline {
+  agent any
+
+  environment {
+    AWS_REGION = "us-east-1"
+    CLUSTER_NAME = "trendify-cluster"
+    IMAGE_NAME = "aravinthdevops/trendmine"
+    GIT_COMMIT_SHORT = ""
+  }
+
+  stages {
+    stage('Checkout Code') {
+      steps {
+        git branch: 'main', url: 'https://github.com/aravinthhub7/trendmine.git'
+        script {
+          GIT_COMMIT_SHORT = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+        }
+      }
+    }
+
+    stage('Build Docker Image') {
+      steps {
+        script {
+          sh "docker build -t ${IMAGE_NAME}:${GIT_COMMIT_SHORT} ."
+        }
+      }
+    }
+
+    stage('Push to DockerHub') {
+      environment {
+        DOCKER_CREDENTIALS = credentials('dockerhub-creds') 
+      }
+      steps {
+        sh '''
+          echo $DOCKER_CREDENTIALS_PSW | docker login -u $DOCKER_CREDENTIALS_USR --password-stdin
+          docker push ${IMAGE_NAME}:${GIT_COMMIT_SHORT}
+        '''
+      }
+    }
+
+    stage('Configure kubectl for EKS') {
+      environment {
+        AWS_CREDS = credentials('aws-creds') 
+      }
+      steps {
+        sh '''
+          export AWS_ACCESS_KEY_ID=$AWS_CREDS_USR
+          export AWS_SECRET_ACCESS_KEY=$AWS_CREDS_PSW
+          aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
+        '''
+      }
+    }
+
+    stage('Deploy to EKS') {
+      steps {
+        sh '''
+          kubectl apply -f k8s/deployment.yaml
+          kubectl apply -f k8s/service.yaml
+          kubectl set image deployment/trendmine-deployment trendmine=${IMAGE_NAME}:${GIT_COMMIT_SHORT} --record
+          kubectl rollout status deployment/trendmine-deployment
+        '''
+      }
+    }
+  }
+
+  post {
+    failure {
+      echo 'Build or deployment failed.'
+    }
+    success {
+      echo "Application deployed successfully at ${IMAGE_NAME}:${GIT_COMMIT_SHORT}"
+    }
+  }
+}
 
 
 
