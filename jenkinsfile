@@ -1,52 +1,74 @@
 pipeline {
-    agent any
-    
-    tools {
-        # This will install Docker automatically if not present
-        docker 'docker'
+  agent any
+
+  environment {
+    AWS_REGION = "us-east-1"
+    CLUSTER_NAME = "trendify-cluster"
+    IMAGE_NAME = "aravinthdevops/trendmine"
+    GIT_COMMIT_SHORT = ""
+  }
+
+  stages {
+    stage('Checkout Code') {
+      steps {
+        git branch: 'main', url: 'https://github.com/aravinthhub7/trendmine.git'
+        script {
+          GIT_COMMIT_SHORT = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+        }
+      }
     }
 
-    environment {
-        DOCKERHUB_CREDENTIALS = credentials('dockerhub-credentials')
-        DOCKERHUB_REPO = "aravinthdevops/trendify-app"
+    stage('Build Docker Image') {
+      steps {
+        script {
+          sh "docker build -t ${IMAGE_NAME}:${GIT_COMMIT_SHORT} ."
+        }
+      }
     }
 
-    stages {
-        stage('Build Docker Image') {
-            steps {
-                script {
-                    sh "docker build -t ${env.DOCKERHUB_REPO}:${BUILD_NUMBER} ."
-                }
-            }
-        }
-
-        stage('Push Docker Image') {
-            steps {
-                script {
-                    withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials', passwordVariable: 'DOCKER_PASSWORD', usernameVariable: 'DOCKER_USERNAME')]) {
-                        sh "docker login -u ${DOCKER_USERNAME} -p ${DOCKER_PASSWORD}"
-                        sh "docker push ${env.DOCKERHUB_REPO}:${BUILD_NUMBER}"
-                        sh "docker push ${env.DOCKERHUB_REPO}:latest"
-                    }
-                }
-            }
-        }
-
-        stage('Deploy to EKS') {
-            steps {
-                script {
-                    # Update the deployment.yaml with the new image tag
-                    sh "sed -i 's|aravinthdevops/trendify-app:latest|${env.DOCKERHUB_REPO}:${BUILD_NUMBER}|g' deployment.yaml"
-                    
-                    # Apply the Kubernetes manifests
-                    sh "kubectl apply -f deployment.yaml"
-                    sh "kubectl apply -f service.yaml"
-                    
-                    # Optional: Verify deployment
-                    sh "kubectl get deployments"
-                    sh "kubectl get services"
-                }
-            }
-        }
+    stage('Push to DockerHub') {
+      environment {
+        DOCKER_CREDENTIALS = credentials('dockerhub-creds') // 🔁 Replace with your actual ID
+      }
+      steps {
+        sh '''
+          echo $DOCKER_CREDENTIALS_PSW | docker login -u $DOCKER_CREDENTIALS_USR --password-stdin
+          docker push ${IMAGE_NAME}:${GIT_COMMIT_SHORT}
+        '''
+      }
     }
+
+    stage('Configure kubectl for EKS') {
+      environment {
+        AWS_CREDS = credentials('aws-creds') // 🔁 Replace with your actual ID
+      }
+      steps {
+        sh '''
+          export AWS_ACCESS_KEY_ID=$AWS_CREDS_USR
+          export AWS_SECRET_ACCESS_KEY=$AWS_CREDS_PSW
+          aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
+        '''
+      }
+    }
+
+    stage('Deploy to EKS') {
+      steps {
+        sh '''
+          kubectl apply -f k8s/deployment.yaml
+          kubectl apply -f k8s/service.yaml
+          kubectl set image deployment/trendmine-deployment trendmine=${IMAGE_NAME}:${GIT_COMMIT_SHORT} --record
+          kubectl rollout status deployment/trendmine-deployment
+        '''
+      }
+    }
+  }
+
+  post {
+    failure {
+      echo 'Build or deployment failed.'
+    }
+    success {
+      echo "Application deployed successfully at ${IMAGE_NAME}:${GIT_COMMIT_SHORT}"
+    }
+  }
 }
