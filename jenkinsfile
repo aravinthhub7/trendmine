@@ -28,7 +28,7 @@ pipeline {
 
     stage('Push to DockerHub') {
       environment {
-        DOCKER_CREDENTIALS = credentials('dockerhub-creds') // 🔁 Replace with your actual ID
+        DOCKER_CREDENTIALS = credentials('dockerhub-creds') 
       }
       steps {
         sh '''
@@ -40,7 +40,7 @@ pipeline {
 
     stage('Configure kubectl for EKS') {
       environment {
-        AWS_CREDS = credentials('aws-creds') // 🔁 Replace with your actual ID
+        AWS_CREDS = credentials('aws-creds')
       }
       steps {
         sh '''
