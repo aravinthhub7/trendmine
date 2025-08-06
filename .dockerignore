@@ -1,9 +1,0 @@
-# Git
-.git
-.gitignore
-# Dependencies
-node_modules
-# Logs
-npm-debug.log*
-# local env files
-.env
