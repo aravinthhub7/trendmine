@@ -5,15 +5,15 @@ pipeline {
     AWS_REGION = "us-east-1"
     CLUSTER_NAME = "trendify-cluster"
     IMAGE_NAME = "aravinthdevops/trendmine"
-    GIT_COMMIT_SHORT = ""
   }
 
   stages {
     stage('Checkout Code') {
       steps {
-        git branch: 'main', url: 'https://github.com/aravinthhub7/trendmine.git'
+        git branch: 'master', url: 'https://github.com/aravinthhub7/trendmine.git'
         script {
-          GIT_COMMIT_SHORT = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+          // Save short Git commit hash globally for image tagging
+          env.GIT_COMMIT_SHORT = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
         }
       }
     }
@@ -21,7 +21,8 @@ pipeline {
     stage('Build Docker Image') {
       steps {
         script {
-          sh "docker build -t ${IMAGE_NAME}:${GIT_COMMIT_SHORT} ."
+          // Build using Dockerfile in the ./dist folder
+          sh "docker build -t ${IMAGE_NAME}:${GIT_COMMIT_SHORT} ./dist"
         }
       }
     }
@@ -40,12 +41,18 @@ pipeline {
 
     stage('Configure kubectl for EKS') {
       environment {
-        AWS_CREDS = credentials('aws-creds')
+        AWS_CREDS = credentials('aws-creds') 
       }
       steps {
         sh '''
-          export AWS_ACCESS_KEY_ID=$AWS_CREDS_USR
-          export AWS_SECRET_ACCESS_KEY=$AWS_CREDS_PSW
+          mkdir -p ~/.aws
+          echo "[default]" > ~/.aws/credentials
+          echo "aws_access_key_id=$AWS_CREDS_USR" >> ~/.aws/credentials
+          echo "aws_secret_access_key=$AWS_CREDS_PSW" >> ~/.aws/credentials
+
+          echo "[default]" > ~/.aws/config
+          echo "region=${AWS_REGION}" >> ~/.aws/config
+
           aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
         '''
       }
@@ -54,9 +61,19 @@ pipeline {
     stage('Deploy to EKS') {
       steps {
         sh '''
-          kubectl apply -f k8s/deployment.yaml
-          kubectl apply -f k8s/service.yaml
+          echo "Current Directory:"
+          pwd
+          echo "Listing Files:"
+          ls -R
+
+          echo " Deploying to EKS..."
+          kubectl apply -f k8s/deployment.yml
+          kubectl apply -f k8s/service.yml
+
+          echo "Updating image in deployment..."
           kubectl set image deployment/trendmine-deployment trendmine=${IMAGE_NAME}:${GIT_COMMIT_SHORT} --record
+
+          echo " Waiting for rollout to complete..."
           kubectl rollout status deployment/trendmine-deployment
         '''
       }
@@ -65,10 +82,10 @@ pipeline {
 
   post {
     failure {
-      echo 'Build or deployment failed.'
+      echo ' Build or deployment failed.'
     }
     success {
-      echo "Application deployed successfully at ${IMAGE_NAME}:${GIT_COMMIT_SHORT}"
+      echo " Application deployed successfully: ${IMAGE_NAME}:${GIT_COMMIT_SHORT}"
     }
   }
 }
